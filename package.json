@@ -1,0 +1,85 @@
+const express = require("express");
+const Subject = require("../models/Subject");
+const TimetableAssignment = require("../models/TimetableAssignment");
+const Attendance = require("../models/Attendance");
+const Internal = require("../models/Internal");
+const { auth } = require("../middleware/auth");
+
+const router = express.Router();
+
+router.get("/", auth, async (req, res) => {
+  const subjects = await Subject.find({ userId: req.user.userId, isActive: true })
+    .sort({ createdAt: -1 })
+    .lean();
+  res.json({ subjects });
+});
+
+router.post("/", auth, async (req, res) => {
+  try {
+    const { subjectName, subjectCode } = req.body || {};
+    if (!subjectName || !String(subjectName).trim()) return res.status(400).json({ message: "subjectName is required" });
+
+    const subject = await Subject.create({
+      userId: req.user.userId,
+      subjectName: String(subjectName).trim(),
+      subjectCode: String(subjectCode || "").trim().toUpperCase()
+    });
+    res.status(201).json({ subject });
+  } catch (e) {
+    res.status(500).json({ message: "Failed to add subject" });
+  }
+});
+
+router.patch("/:id", auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { subjectName, subjectCode } = req.body || {};
+    const subject = await Subject.findOne({ _id: id, userId: req.user.userId, isActive: true });
+    if (!subject) return res.status(404).json({ message: "Subject not found" });
+
+    if (subjectName !== undefined) {
+      if (!String(subjectName).trim()) return res.status(400).json({ message: "subjectName cannot be empty" });
+      subject.subjectName = String(subjectName).trim();
+    }
+    if (subjectCode !== undefined) {
+      subject.subjectCode = String(subjectCode || "").trim().toUpperCase();
+    }
+
+    await subject.save();
+    res.json({ subject });
+  } catch (e) {
+    res.status(500).json({ message: "Failed to update subject" });
+  }
+});
+
+router.delete("/:id", auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const scope = req.query.scope === "complete" ? "complete" : "timetable-only";
+
+    const subject = await Subject.findOne({ _id: id, userId: req.user.userId });
+    if (!subject) return res.status(404).json({ message: "Subject not found" });
+
+    // Remove timetable entries always (so it disappears from schedule immediately)
+    await TimetableAssignment.deleteMany({ userId: req.user.userId, subjectId: subject._id });
+
+    if (scope === "timetable-only") {
+      subject.isActive = false;
+      subject.deletedAt = new Date();
+      await subject.save();
+      return res.json({ message: "Subject removed from timetable (history kept)" });
+    }
+
+    // Complete delete
+    await Attendance.deleteMany({ userId: req.user.userId, subjectId: subject._id });
+    await Internal.deleteMany({ userId: req.user.userId, subjectId: subject._id });
+    await Subject.deleteOne({ _id: subject._id });
+
+    return res.json({ message: "Subject deleted completely (history removed)" });
+  } catch (e) {
+    res.status(500).json({ message: "Failed to delete subject" });
+  }
+});
+
+module.exports = router;
+

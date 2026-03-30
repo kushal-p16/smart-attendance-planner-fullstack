@@ -1,0 +1,51 @@
+const express = require("express");
+const Internal = require("../models/Internal");
+const Subject = require("../models/Subject");
+const { auth } = require("../middleware/auth");
+
+const router = express.Router();
+
+router.get("/", auth, async (req, res) => {
+  const items = await Internal.find({ userId: req.user.userId })
+    .populate({ path: "subjectId", select: "subjectName subjectCode isActive" })
+    .lean();
+  res.json({ internals: items });
+});
+
+router.post("/", auth, async (req, res) => {
+  try {
+    const { subjectId, examDate } = req.body || {};
+    if (!subjectId) return res.status(400).json({ message: "subjectId is required" });
+    if (!examDate) {
+      await Internal.deleteOne({ userId: req.user.userId, subjectId });
+      return res.json({ message: "Internal exam removed" });
+    }
+
+    const subject = await Subject.findOne({ _id: subjectId, userId: req.user.userId, isActive: true });
+    if (!subject) return res.status(404).json({ message: "Subject not found" });
+
+    const normalized = String(examDate).slice(0, 10);
+    const doc = await Internal.findOneAndUpdate(
+      { userId: req.user.userId, subjectId },
+      { userId: req.user.userId, subjectId, examDate: normalized },
+      { upsert: true, new: true }
+    );
+    return res.json({ internals: doc });
+  } catch (e) {
+    return res.status(500).json({ message: "Failed to set internal exam date" });
+  }
+});
+
+router.delete("/", auth, async (req, res) => {
+  try {
+    const { subjectId } = req.body || {};
+    if (!subjectId) return res.status(400).json({ message: "subjectId is required" });
+    await Internal.deleteOne({ userId: req.user.userId, subjectId });
+    return res.json({ message: "Internal exam removed" });
+  } catch (e) {
+    return res.status(500).json({ message: "Failed to delete internal" });
+  }
+});
+
+module.exports = router;
+
